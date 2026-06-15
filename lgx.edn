@@ -6,10 +6,6 @@
  :lgx/min-lg-version "1.11.0"    ; needs an lg with the wasm host
 
  :tasks
- {setup-wasi-sdk
-  {:doc "Download wasi-sdk (clang + WASI sysroot) for this OS/arch into ~/wasi-sdk"
-   :do {:sh "bash scripts/setup-wasi-sdk.sh"}}
-
-  build-wasm
-  {:doc "Build resources/sqlite3.wasm from the SQLite amalgamation (run setup-wasi-sdk first)"
+ {build-wasm
+  {:doc "Build resources/sqlite3.wasm from the SQLite amalgamation (needs wasi-sdk: mise install)"
    :do {:sh "bash scripts/build-wasm.sh"}}}}

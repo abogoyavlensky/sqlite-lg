@@ -1,0 +1,7 @@
+[tools]
+# wasi-sdk provides clang + the WASI sysroot used to (re)build resources/sqlite3.wasm.
+# Installed via mise's github: backend (like lg/lgx/wtr) — `mise install`.
+wasi-sdk = "wasi-sdk-33"
+
+[tool_alias]
+wasi-sdk = "github:WebAssembly/wasi-sdk"

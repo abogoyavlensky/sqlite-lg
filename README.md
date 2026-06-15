@@ -71,16 +71,16 @@ puts the resource on the path and verifies your `lg` is new enough.
 ## Rebuilding `sqlite3.wasm`
 
 The built module is committed in `resources/`. Rebuilding needs wasi-sdk (clang +
-WASI sysroot):
+WASI sysroot), declared in `.mise.toml` and installed via mise's `github:`
+backend (same as `lg`/`lgx`):
 
 ```sh
-lgx setup-wasi-sdk     # download wasi-sdk for your OS/arch into ~/wasi-sdk
-lgx build-wasm         # compile resources/sqlite3.wasm from the SQLite amalgamation
+mise install      # installs wasi-sdk (github:WebAssembly/wasi-sdk) for your OS/arch
+lgx build-wasm    # compile resources/sqlite3.wasm from the SQLite amalgamation
 ```
 
-`setup-wasi-sdk` installs wasi-sdk 33 by default (override with `WASI_SDK_VERSION`);
-`build-wasm` reads `$WASI_SDK_PATH` (default `~/wasi-sdk`). Both are plain shell
-scripts under `scripts/` if you'd rather run them directly.
+`build-wasm` resolves wasi-sdk via `mise where wasi-sdk` (or `$WASI_SDK_PATH` if
+set), then runs `scripts/build-wasm.sh`.
 
-> The asdf/mise wasi-sdk plugin is intentionally not used: it builds a pre-v25,
-> non-arch asset URL that 404s on current releases and never supported arm64.
+> Note: the wasi-sdk **asdf** plugin (`asdf:…`) is broken (pre-v25, non-arch URL,
+> no arm64); mise's **`github:`** backend works and is what `.mise.toml` uses.

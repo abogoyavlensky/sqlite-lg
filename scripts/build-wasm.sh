@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
 # Build resources/sqlite3.wasm from the SQLite amalgamation using wasi-sdk.
-# Invoked by `lgx build-wasm`. Uses wasi-sdk at $WASI_SDK_PATH (default
-# ~/wasi-sdk); run `lgx setup-wasi-sdk` first to install it.
+# Invoked by `lgx build-wasm`. Uses wasi-sdk at $WASI_SDK_PATH, or resolves it
+# from mise (`mise where wasi-sdk`); run `mise install` first to install it.
 #
 # Produces a WASI "reactor" module (exports _initialize, no _start) exporting
 # the SQLite C-API subset the `sqlite` namespace calls, plus malloc/free.
 set -euo pipefail
 
-WASI_SDK_PATH="${WASI_SDK_PATH:-$HOME/wasi-sdk}"
-if [ ! -x "$WASI_SDK_PATH/bin/clang" ]; then
-  echo "wasi-sdk not found at $WASI_SDK_PATH — run 'lgx setup-wasi-sdk' first" >&2
+if [ -z "${WASI_SDK_PATH:-}" ]; then
+  WASI_SDK_PATH="$(mise where wasi-sdk 2>/dev/null || true)"
+fi
+if [ -z "$WASI_SDK_PATH" ] || [ ! -x "$WASI_SDK_PATH/bin/clang" ]; then
+  echo "wasi-sdk not found — run 'mise install' (installs it via .mise.toml)" >&2
   exit 1
 fi
 
