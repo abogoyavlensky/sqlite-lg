@@ -1,0 +1,35 @@
+(ns test.sqlite-test
+  (:require [sqlite]))
+
+;; Standalone script (run directly under a wasm-capable lg):
+;;   lg -source-paths src -resource-paths resources test/sqlite_test.lg
+;; Throws on the first failed check; prints OK at the end.
+
+(defn- check [ok? msg]
+  (if ok?
+    (println "  ok:" msg)
+    (throw (ex-info (str "FAIL: " msg) {}))))
+
+(let [db (sqlite/open ":memory:")]
+  (sqlite/execute! db "create table users (id integer primary key, name text, score real)")
+
+  (let [r1 (sqlite/execute! db "insert into users (name, score) values (?, ?)" "Alice" 9.5)
+        r2 (sqlite/execute! db "insert into users (name, score) values (?, ?)" "Bob" 7.0)]
+    (check (= 1 (:rows-affected r1)) "insert reports rows-affected = 1")
+    (check (= 2 (:last-insert-id r2)) "second insert rowid = 2"))
+
+  (let [rows (sqlite/query db "select id, name, score from users where score > ? order by id" 8)]
+    (check (= 1 (count rows)) "one row with score > 8")
+    (check (= 1 (:id (first rows))) "id = 1 (INTEGER -> int)")
+    (check (= "Alice" (:name (first rows))) "name = Alice (TEXT -> string)")
+    (check (= 9.5 (:score (first rows))) "score = 9.5 (REAL -> float)"))
+
+  (check (= 2 (:n (first (sqlite/query db "select count(*) as n from users")))) "count = 2")
+
+  ;; NULL round-trip
+  (sqlite/execute! db "insert into users (name, score) values (?, ?)" "Carol" nil)
+  (check (nil? (:score (first (sqlite/query db "select score from users where name = ?" "Carol"))))
+         "NULL score -> nil")
+
+  (sqlite/close db)
+  (println "sqlite :memory: tests OK"))

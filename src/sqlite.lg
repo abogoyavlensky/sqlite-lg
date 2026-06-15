@@ -1,0 +1,177 @@
+(ns sqlite
+  "Embedded SQLite for let-go, via the in-process wasm host (wazero).
+
+  Loads sqlite3.wasm (a WASI reactor build of the SQLite amalgamation) through
+  the built-in `wasm` namespace and exposes a small next-jdbc-shaped API:
+
+    (def db (sqlite/open \":memory:\"))         ; or a file path
+    (sqlite/execute! db \"create table t (...)\")
+    (sqlite/execute! db \"insert into t values (?, ?)\" a b)
+    (sqlite/query    db \"select * from t where x > ?\" 1)  ; => [{:col v ...} ...]
+    (sqlite/close db)
+
+  Requires an `lg` with the wasm host and sqlite3.wasm on the resource path.")
+
+;; --- SQLite constants -------------------------------------------------------
+
+(def ^:private SQLITE-OK 0)
+(def ^:private SQLITE-ROW 100)
+(def ^:private SQLITE-DONE 101)
+(def ^:private OPEN-RW-CREATE 6)        ; READWRITE(2) | CREATE(4)
+(def ^:private SQLITE-TRANSIENT -1)     ; bind_text: make SQLite copy the text
+;; column types
+(def ^:private COL-INT 1)
+(def ^:private COL-FLOAT 2)
+(def ^:private COL-TEXT 3)
+(def ^:private COL-NULL 5)
+
+;; --- shared wasm instance ---------------------------------------------------
+
+(def ^:private *instance* (atom nil))
+
+(defn- instance
+  "The lazily-instantiated, _initialized sqlite3.wasm module (shared)."
+  []
+  (or @*instance*
+      (let [i (wasm/instantiate "sqlite3.wasm")]
+        (wasm/call i "_initialize")
+        (reset! *instance* i)
+        i)))
+
+;; --- marshaling helpers -----------------------------------------------------
+
+(defn- cstr
+  "Write s as a NUL-terminated C string into wasm memory; return the pointer.
+   Caller frees with (wasm/call i \"free\" p)."
+  [i s]
+  (let [z (str s (char 0))
+        size (* 4 (inc (count z)))     ; UTF-8 worst case (<=4 bytes/char) + slack
+        p (wasm/call i "malloc" size)]
+    (wasm/write i p z)
+    p))
+
+(defn- read-ptr
+  "Read a little-endian 32-bit pointer that SQLite wrote into memory at p."
+  [i p]
+  (let [b (wasm/read i p 4)]
+    (+ (nth b 0)
+       (* 256 (nth b 1))
+       (* 65536 (nth b 2))
+       (* 16777216 (nth b 3)))))
+
+(defn- err-msg [i db]
+  (wasm/read-cstring i (wasm/call i "sqlite3_errmsg" db)))
+
+(defn- check! [i db rc expected what]
+  (when-not (= rc expected)
+    (throw (ex-info (str "sqlite " what " failed: " (err-msg i db) " (rc=" rc ")")
+                    {:rc rc :op what}))))
+
+;; --- statement helpers ------------------------------------------------------
+
+(defn- prepare!
+  "Prepare sql into a statement pointer (caller finalizes)."
+  [i db sql]
+  (let [sqlp (cstr i sql)
+        ppstmt (wasm/call i "malloc" 4)
+        rc (wasm/call i "sqlite3_prepare_v2" db sqlp -1 ppstmt 0)
+        stmt (read-ptr i ppstmt)]
+    (wasm/call i "free" sqlp)
+    (wasm/call i "free" ppstmt)
+    (check! i db rc SQLITE-OK "prepare")
+    stmt))
+
+(defn- bind-params! [i db stmt params]
+  (doseq [[n v] (map-indexed (fn [n v] [(inc n) v]) params)]
+    (let [rc (cond
+               (nil? v) (wasm/call i "sqlite3_bind_null" stmt n)
+               (integer? v) (wasm/call i "sqlite3_bind_int64" stmt n v)
+               (float? v) (wasm/call i "sqlite3_bind_double" stmt n v)
+               :else (let [p (cstr i (str v))
+                           r (wasm/call i "sqlite3_bind_text" stmt n p -1 SQLITE-TRANSIENT)]
+                       (wasm/call i "free" p)  ; TRANSIENT copied it
+                       r))]
+      (check! i db rc SQLITE-OK (str "bind param " n)))))
+
+(defn- read-col [i stmt c]
+  (let [t (wasm/call i "sqlite3_column_type" stmt c)]
+    (cond
+      (= t COL-INT) (wasm/call i "sqlite3_column_int64" stmt c)
+      (= t COL-FLOAT) (wasm/call i "sqlite3_column_double" stmt c)
+      (= t COL-TEXT) (wasm/read-string i
+                                       (wasm/call i "sqlite3_column_text" stmt c)
+                                       (wasm/call i "sqlite3_column_bytes" stmt c))
+      (= t COL-NULL) nil
+      ;; BLOB and anything else: raw bytes (best-effort for v1)
+      :else (wasm/read i
+                       (wasm/call i "sqlite3_column_text" stmt c)
+                       (wasm/call i "sqlite3_column_bytes" stmt c)))))
+
+;; --- public API -------------------------------------------------------------
+
+(defn open
+  "Open (or create) a database at path. Use \":memory:\" for in-memory.
+   Returns a db handle map. File databases need the file's directory mounted
+   for WASI (see the README); :memory: needs no filesystem."
+  [path]
+  (let [i (instance)
+        fname (cstr i path)
+        ppdb (wasm/call i "malloc" 4)
+        rc (wasm/call i "sqlite3_open_v2" fname ppdb OPEN-RW-CREATE 0)
+        db (read-ptr i ppdb)]
+    (wasm/call i "free" fname)
+    (wasm/call i "free" ppdb)
+    (when-not (= rc SQLITE-OK)
+      (let [msg (err-msg i db)]
+        (wasm/call i "sqlite3_close_v2" db)
+        (throw (ex-info (str "sqlite open failed: " msg " (rc=" rc ")")
+                        {:rc rc :path path}))))
+    {:db db}))
+
+(defn execute!
+  "Run a non-query statement (DDL/DML). Trailing args bind ? placeholders.
+   Returns {:rows-affected n :last-insert-id m}."
+  [db sql & params]
+  (let [i (instance)
+        dbp (:db db)
+        stmt (prepare! i dbp sql)]
+    (try
+      (bind-params! i dbp stmt params)
+      (let [sr (wasm/call i "sqlite3_step" stmt)]
+        (when-not (= sr SQLITE-DONE)
+          (throw (ex-info (str "sqlite execute! failed: " (err-msg i dbp) " (rc=" sr ")") {:rc sr})))
+        {:rows-affected (wasm/call i "sqlite3_changes" dbp)
+         :last-insert-id (wasm/call i "sqlite3_last_insert_rowid" dbp)})
+      (finally
+        (wasm/call i "sqlite3_finalize" stmt)))))
+
+(defn query
+  "Run a query. Trailing args bind ? placeholders. Returns a vector of row
+   maps with keywordized column names and typed values (INTEGER->int,
+   REAL->float, TEXT->string, NULL->nil)."
+  [db sql & params]
+  (let [i (instance)
+        dbp (:db db)
+        stmt (prepare! i dbp sql)]
+    (try
+      (bind-params! i dbp stmt params)
+      (let [ncol (wasm/call i "sqlite3_column_count" stmt)
+            cols (mapv (fn [c]
+                         (keyword (wasm/read-cstring i (wasm/call i "sqlite3_column_name" stmt c))))
+                       (range ncol))]
+        (loop [acc []]
+          (let [sr (wasm/call i "sqlite3_step" stmt)]
+            (cond
+              (= sr SQLITE-ROW)
+              (recur (conj acc (into {} (map (fn [c k] [k (read-col i stmt c)])
+                                             (range ncol) cols))))
+              (= sr SQLITE-DONE) acc
+              :else (throw (ex-info (str "sqlite query failed: " (err-msg i dbp) " (rc=" sr ")") {:rc sr}))))))
+      (finally
+        (wasm/call i "sqlite3_finalize" stmt)))))
+
+(defn close
+  "Close a database handle."
+  [db]
+  (wasm/call (instance) "sqlite3_close_v2" (:db db))
+  nil)
