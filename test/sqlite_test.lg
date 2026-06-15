@@ -31,5 +31,17 @@
   (check (nil? (:score (first (sqlite/query db "select score from users where name = ?" "Carol"))))
          "NULL score -> nil")
 
+  ;; --- file database (WASI dir mount) ---
+  (let [f "b3-scratch.db"]
+    (let [fdb (sqlite/open f)]
+      (sqlite/execute! fdb "create table if not exists kv (k text, v integer)")
+      (sqlite/execute! fdb "delete from kv")
+      (sqlite/execute! fdb "insert into kv values (?, ?)" "answer" 42)
+      (sqlite/close fdb))
+    (let [fdb (sqlite/open f)                       ; reopen -> proves persistence
+          row (first (sqlite/query fdb "select v from kv where k = ?" "answer"))]
+      (check (= 42 (:v row)) "file DB persists across reopen")
+      (sqlite/close fdb)))
+
   (sqlite/close db)
-  (println "sqlite :memory: tests OK"))
+  (println "sqlite tests OK (:memory: + file)"))

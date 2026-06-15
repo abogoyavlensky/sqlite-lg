@@ -33,7 +33,7 @@
   "The lazily-instantiated, _initialized sqlite3.wasm module (shared)."
   []
   (or @*instance*
-      (let [i (wasm/instantiate "sqlite3.wasm")]
+      (let [i (wasm/instantiate "sqlite3.wasm" :dir ".")]
         (wasm/call i "_initialize")
         (reset! *instance* i)
         i)))
@@ -109,13 +109,19 @@
 
 ;; --- public API -------------------------------------------------------------
 
+(defn- db-path
+  "Map a user path to the guest path SQLite opens. :memory: passes through;
+   file paths are taken relative to the cwd (mounted at the guest root)."
+  [path]
+  (if (= path ":memory:") path (str "/" path)))
+
 (defn open
   "Open (or create) a database at path. Use \":memory:\" for in-memory.
    Returns a db handle map. File databases need the file's directory mounted
    for WASI (see the README); :memory: needs no filesystem."
   [path]
   (let [i (instance)
-        fname (cstr i path)
+        fname (cstr i (db-path path))
         ppdb (wasm/call i "malloc" 4)
         rc (wasm/call i "sqlite3_open_v2" fname ppdb OPEN-RW-CREATE 0)
         db (read-ptr i ppdb)]
