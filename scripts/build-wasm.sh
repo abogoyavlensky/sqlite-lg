@@ -16,6 +16,7 @@ if [ -z "$WASI_SDK_PATH" ] || [ ! -x "$WASI_SDK_PATH/bin/clang" ]; then
   exit 1
 fi
 
+# 3530200 = SQLite 3.53.2, encoded X_YY_ZZ_PP. Override SQLITE_AMALG to pin another.
 SQLITE_AMALG="${SQLITE_AMALG:-2026/sqlite-amalgamation-3530200.zip}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

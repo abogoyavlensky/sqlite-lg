@@ -1,0 +1,2 @@
+{:deps {sqlite {:local/root "../.."}}   ; real consumers use {:git/url ... :git/sha ...}
+ :main "main.lg"}
