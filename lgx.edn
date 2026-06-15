@@ -1,11 +1,9 @@
 {:paths ["src"]
  :resource-paths ["resources"]
 
- ;; When consumed as a dependency, sqlite-lg also needs these keys (added once
- ;; lgx ships wasm-dep support — Phase C of the wazero plan; the current
- ;; released lgx's schema rejects unknown keys, so they're held back):
- ;;   :lgx/lib {:resources true}    ; expose resources/ (the .wasm) to consumers
- ;;   :lgx/min-lg-version "1.11.0"  ; needs an lg with the wasm host
+ ;; Consumed by lgx when sqlite-lg is used as a dependency:
+ :lgx/lib {:resources true}      ; expose resources/ (the .wasm) to consumers
+ :lgx/min-lg-version "1.11.0"    ; needs an lg with the wasm host
 
  :tasks
  {setup-wasi-sdk
