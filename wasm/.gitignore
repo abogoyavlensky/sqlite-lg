@@ -1,0 +1,5 @@
+# Build inputs (downloaded by the Makefile); the built artifact lives in
+# ../resources/sqlite3.wasm and IS committed.
+sqlite3.c
+sqlite3.h
+*.zip
